@@ -84,6 +84,9 @@ class FeatureTransform:
             robot_config = yaml.safe_load(f)
         f.close()
 
+        self.dataset_options = robot_config.pop('dataset', {})
+        self.canonicalize_pose_quaternions = robot_config.pop('canonicalize_pose_quaternions', False)
+
         if norm_stats_path is None:
             norm_stats_path = robot_config.pop('norm_stats')
         else:
@@ -380,6 +383,10 @@ class FeatureTransform:
             item['action_is_pad'] = torch.zeros(self.chunk_size)
         item = self.convert_features(item, w_action=w_action)
 
+        if self.canonicalize_pose_quaternions:
+            for feature in self.states + (self.actions if w_action else []):
+                if feature.endswith('.end.position'):
+                    item[feature] = canonicalize_pose_quaternion(item[feature])
 
         for action_feature in self.actions:
             if self.action_subtract_state[action_feature] and w_action:
@@ -609,6 +616,7 @@ class FeatureTransform:
         state = torch.cat(states, dim=-1).to(torch.float32)
         action = torch.cat(actions, dim=-1).to(torch.float32)
         chunk_joint_mask = action_joint_mask.clone().unsqueeze(0).repeat(self.chunk_size, 1)
+        chunk_joint_mask &= ~item['action_is_pad'].to(dtype=torch.bool).unsqueeze(-1)
 
         batch_dict =  {
             "image": images,

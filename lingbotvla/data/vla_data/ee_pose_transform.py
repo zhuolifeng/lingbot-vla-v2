@@ -6,6 +6,7 @@ __all__ = [
     '_is_quaternion_relative_type',
     'relative_pose_quaternion',
     'absolute_pose_quaternion',
+    'canonicalize_pose_quaternion',
 ]
 
 def quat_normalize(q: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
@@ -15,9 +16,25 @@ def quat_normalize(q: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
 
 
 def quat_canonicalize(q: torch.Tensor) -> torch.Tensor:
-    """Flip quaternion sign so the scalar part keeps a stable non-negative sign."""
-    sign = torch.where(q[..., 3:4] < 0, -1.0, 1.0)
+    """Use w >= 0, breaking exact 180-degree ties lexicographically by x,y,z."""
+    pivot = q[..., 3:4]
+    for i in range(3):
+        pivot = torch.where(pivot == 0, q[..., i:i+1], pivot)
+    sign = torch.where(pivot < 0, -1.0, 1.0)
     return q * sign
+
+
+def canonicalize_pose_quaternion(pose: torch.Tensor) -> torch.Tensor:
+    """Normalize and canonicalize xyz+xyzw poses before statistics or inference."""
+    if pose.shape[-1] % 7:
+        raise ValueError('Expected concatenated xyz+xyzw poses')
+    shaped = pose.reshape(*pose.shape[:-1], -1, 7)
+    q = shaped[..., 3:7]
+    if not torch.isfinite(shaped).all() or torch.any(torch.linalg.vector_norm(q, dim=-1) < 1e-8):
+        raise ValueError('Non-finite pose or zero quaternion')
+    result = shaped.clone()
+    result[..., 3:7] = quat_canonicalize(quat_normalize(q))
+    return result.reshape_as(pose)
 
 
 def quat_inverse(q: torch.Tensor) -> torch.Tensor:

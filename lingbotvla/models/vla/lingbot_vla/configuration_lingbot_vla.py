@@ -92,6 +92,7 @@ class LingbotVLAConfig(PretrainedConfig):
 
         train_expert_only: bool = False,
         train_state_proj: bool = True,
+        use_state: bool = True,
 
         **kwargs
     ):
@@ -100,6 +101,7 @@ class LingbotVLAConfig(PretrainedConfig):
             moe_implementation = kwargs.pop("_moe_implementation", None)
         self.architectures = ["LingbotVlaPolicy"]
         self.train_state_proj = train_state_proj
+        self.use_state = use_state
         self.train_expert_only = train_expert_only
         self.use_cache = False
         self.attention_implementation = attention_implementation

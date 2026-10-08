@@ -1,0 +1,36 @@
+data:
+  datasets_type: vla
+  data_name: multi
+  train_path: assets/training_data/umi_gift_minmax.txt
+  robot_config_root: configs/robot_configs
+  joints:
+  - arm.position: 14
+  - end.position: 14
+  - effector.position: 2
+  - waist.position: 4
+  - head.position: 2
+  - base.position: 3
+  - hand.position: 12
+  cameras:
+  - camera_wrist_left
+  - camera_wrist_right
+  norm_type:
+  - arm.position: minmax
+  - end.position: minmax
+  - effector.position: minmax
+  - waist.position: minmax
+  - head.position: minmax
+  - base.position: minmax
+  - hand.position: minmax
+  num_workers: 4
+  use_future_image: true
+  episode_split: train
+  norm_path: assets/norm_stats/umi_gift_minmax.json
+  robot_name: umi_gift_minmax
+train:
+  max_steps: 1
+  chunk_size: 50
+  micro_batch_size: 32
+  global_batch_size: 256
+  gradient_accumulation_steps: 1
+  output_dir: output/umi_gift_minmax_norm

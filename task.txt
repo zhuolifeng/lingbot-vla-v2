@@ -1,0 +1,3 @@
+选手需基于 LingBot-VLA 2.0 预训练模型完成训练与调优，训练数据统一使用 RoboTwin 2.0 中 Aloha-AgileX 的 50 个任务 clean 数据，每个任务 50 条，禁止使用 randomized 数据参与训练。
+
+选手可通过调整模型训练参数、优化训练策略、改进数据处理方式、调整模型结构或推理策略提升性能。最终需按照官方评测标准，提交 Aloha-AgileX 50 个任务在 clean 和 randomized 两个 setting 下的测试结果，每个任务测试 100 次。

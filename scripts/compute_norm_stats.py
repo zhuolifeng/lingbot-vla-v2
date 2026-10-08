@@ -31,6 +31,14 @@ logger = helper.create_logger(__name__)
 
 @dataclass
 class NormComputeDataArguments(MyDataArguments):
+    norm_device: str = field(
+        default='cpu',
+        metadata={"help": "Statistics backend: cpu or cuda (local_v21 datasets only)."},
+    )
+    norm_batch_size: int = field(
+        default=2048,
+        metadata={"help": "Sample starts per CUDA batch; independent of training batch size."},
+    )
     data_ratio_for_norm_compute: float = field(
         default=1.0,
         metadata={"help": "data ratio for norm compute."},
@@ -147,6 +155,12 @@ def compute_norm(dataset, batch_size, stats, state_norm_keys, acton_norm_keys, d
                 stats[key].update(values.reshape(-1, values.shape[-1]))
             for key in acton_norm_keys:
                 values = np.asarray(batch[key]) if (not delta_norm[key] or norm_merge_chunk_dim) else np.asarray(batch[key].reshape(batch[key].shape[0], -1))
+                # Padded terminal labels must not bias merged action statistics.
+                if norm_merge_chunk_dim and 'action_is_pad' in batch:
+                    valid = ~np.asarray(batch['action_is_pad'], dtype=bool)
+                    values = values[valid]
+                    if not values.size:
+                        continue
                 stats[key].update(values.reshape(-1, values.shape[-1]))
 
     del pool
@@ -179,6 +193,15 @@ def _init_dataset_worker(
 if __name__ == "__main__":
 
     args = parse_args(Arguments)
+
+    if args.data.norm_device not in ('cpu', 'cuda'):
+        raise ValueError('norm_device must be cpu or cuda')
+    if args.data.norm_device == 'cuda':
+        if not torch.cuda.is_available():
+            raise RuntimeError('CUDA norm requested, but CUDA is unavailable in this process')
+        if args.data.data_ratio_for_norm_compute != 1.0 or not args.data.norm_merge_chunk_dim:
+            raise ValueError('CUDA norm requires the full training split and norm_merge_chunk_dim=true')
+        torch.cuda.set_device(args.train.local_rank)
 
     # Distributed initialization: reuse train.sh + torchrun; RANK/WORLD_SIZE/LOCAL_RANK are already injected via env vars
     if args.train.world_size > 1 and not dist.is_initialized():
@@ -230,6 +253,22 @@ if __name__ == "__main__":
     state_norm_keys = dataset._datasets[0].state_features
     acton_norm_keys = dataset._datasets[0].action_features
     delta_norm = dataset._datasets[0].feature_transform.action_subtract_state
+    if args.data.norm_device == 'cuda':
+        from lingbotvla.data.vla_data.gpu_norm import compute_local_norm
+
+        norm_stats, count = compute_local_norm(
+            dataset, torch.device('cuda', args.train.local_rank),
+            batch_size=args.data.norm_batch_size, rank=rank, world_size=world_size,
+        )
+        if rank == 0:
+            output_path = Path(args.data.norm_path)
+            print(f'Writing GPU-computed stats ({count} sample starts) to: {output_path}')
+            normalize.save(output_path, norm_stats, count)
+        if world_size > 1:
+            dist.barrier()
+            dist.destroy_process_group()
+        sys.exit(0)
+
     stats = {key: normalize.RunningStats() for key in acton_norm_keys+state_norm_keys}
     chunk_size = args.data.chunk_size
     

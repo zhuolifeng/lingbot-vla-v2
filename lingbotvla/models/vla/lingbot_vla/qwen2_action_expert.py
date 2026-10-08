@@ -307,6 +307,9 @@ class Qwen2TokenMoeBlock(nn.Module):
                 and hidden_flat.is_cuda
                 and not self.training
                 and not torch.is_grad_enabled()
+                # FSDP2 expert units must enter self.experts(...) so their
+                # forward hook unshards weights during periodic validation.
+                and not hasattr(self.experts, 'unshard')
             )
             if use_robby_moe:
                 try:

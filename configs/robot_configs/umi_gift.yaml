@@ -1,0 +1,75 @@
+dataset:
+  reader: local_v21
+  trim_start: 30
+  trim_end: 30
+  action_target_offset: 1
+  prompt_field: task_annotation
+  split_file: assets/training_data/umi_split.json
+canonicalize_pose_quaternions: true
+states:
+- observation.state.end.position:
+    origin_keys:
+    - observation.state:
+        start: 0
+        end: 3
+    - observation.state:
+        start: 4
+        end: 7
+    - observation.state:
+        start: 3
+        end: 4
+    - observation.state:
+        start: 8
+        end: 11
+    - observation.state:
+        start: 12
+        end: 15
+    - observation.state:
+        start: 11
+        end: 12
+- observation.state.effector.position:
+    origin_keys:
+    - observation.state:
+        start: 7
+        end: 8
+    - observation.state:
+        start: 15
+        end: 16
+actions:
+- action.end.position:
+    origin_keys:
+    - action:
+        start: 0
+        end: 3
+    - action:
+        start: 4
+        end: 7
+    - action:
+        start: 3
+        end: 4
+    - action:
+        start: 8
+        end: 11
+    - action:
+        start: 12
+        end: 15
+    - action:
+        start: 11
+        end: 12
+    subtract_state: true
+    relative_type: quaternion_local
+- action.effector.position:
+    origin_keys:
+    - action:
+        start: 7
+        end: 8
+    - action:
+        start: 15
+        end: 16
+    subtract_state: false
+images:
+- observation.images.camera_wrist_left:
+    origin_keys: observation.images.wrist_image_1
+- observation.images.camera_wrist_right:
+    origin_keys: observation.images.wrist_image_2
+norm_stats: assets/norm_stats/umi_gift.json

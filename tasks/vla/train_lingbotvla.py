@@ -45,8 +45,11 @@ from lingbotvla.models.vla.vision_models.module_utils import (
     get_video_target,
     log_video,
 )
-from lingbotvla.models.vla.lingbot_vla.moe_load_balance import build_moe_load_balance_hook
 import gc
+from copy import deepcopy
+from lingbotvla.utils.vla_validation import (
+    build_validation_loader, evaluate_action_loss, fixed_validation_indices,
+)
 gc.set_threshold(50000, 50, 50)
 
 logger = helper.create_logger(__name__)
@@ -118,6 +121,9 @@ def get_moe_param_groups(model: "torch.nn.Module", args_train) -> Optional[List[
 
 @dataclass
 class MyTrainingArguments(TrainingArguments):
+    logging_steps: int = field(default=1, metadata={"help": "Log training metrics every N optimizer steps."})
+    eval_steps: int = field(default=0, metadata={"help": "Validate action loss every N optimizer steps; 0 disables."})
+    eval_samples: int = field(default=1024, metadata={"help": "Fixed number of validation sample starts."})
     freeze_vit: bool = field(
         default=False,
         metadata={"help": "Whether or not to freeze the vit parameters."},
@@ -137,6 +143,10 @@ class MyTrainingArguments(TrainingArguments):
     train_state_proj: bool = field(
         default=True,
         metadata={"help": "Train state proj only or not."},
+    )
+    use_state: bool = field(
+        default=True,
+        metadata={"help": "Use observed state as V2 model input; otherwise zero it before projection."},
     )
     tokenizer_max_length: int = field(
         default=48,
@@ -286,6 +296,10 @@ class MyTrainingArguments(TrainingArguments):
 
 @dataclass
 class MyDataArguments(DataArguments):
+    episode_split: str = field(
+        default='train',
+        metadata={"help": "Episode split in the local v2.1 reader manifest (train or val)."},
+    )
     source_name: str = field(
         default=None,
         metadata={"help": "Source name of dataset."},
@@ -332,6 +346,15 @@ class Arguments:
 
 def main():
     args = parse_args(Arguments)
+    if args.train.logging_steps < 1 or args.train.eval_steps < 0:
+        raise ValueError('logging_steps must be positive and eval_steps must be nonnegative')
+    if args.train.eval_steps:
+        if args.data.datasets_type != 'vla' or args.model.config_key != 'LingbotVLAV2Config':
+            raise ValueError('Periodic action validation currently requires LingbotVLAV2Config and VLA data')
+        if args.train.world_size != args.train.data_parallel_size:
+            raise ValueError('Periodic action validation currently requires data parallelism only')
+        if args.data.episode_split != 'train':
+            raise ValueError('Periodic validation requires training on the train episode split')
     logger.info(f"Process rank: {args.train.global_rank}, world size: {args.train.world_size}")
     logger.info_rank0(json.dumps(asdict(args), indent=2))
     torch.cuda.set_device(f"cuda:{args.train.local_rank}")
@@ -464,6 +487,36 @@ def main():
     else:
         raise NotImplementedError(f"Unsupported dataloader type: {args.data.dataloader_type}.")
 
+    validation_loader = None
+    if args.train.eval_steps:
+        # Only the local reader has an explicit, disjoint episode split manifest.
+        for wrapped in getattr(train_dataset, '_datasets', [train_dataset]):
+            options = wrapped.feature_transform.dataset_options
+            if options.get('reader') != 'local_v21' or not options.get('split_file'):
+                raise ValueError('Periodic validation requires local_v21 with an episode split_file')
+        validation_data = deepcopy(args.data)
+        validation_data.episode_split = 'val'
+        validation_data.image_augment = False
+        validation_data.use_future_image = False
+        validation_dataset = build_vla_dataset(
+            dataset_config=validation_data, model_config=args.model, config=model.config,
+            processor=processor, use_depth_align=False,
+        )
+        indices = fixed_validation_indices(
+            len(validation_dataset), args.train.eval_samples, args.train.seed,
+            args.train.world_size, args.train.micro_batch_size,
+        )
+        validation_loader = build_validation_loader(
+            validation_dataset, indices, VLADataCollatorWithPacking(),
+            args.train.micro_batch_size, args.train.global_rank, args.train.world_size,
+            args.train.seed, num_workers=args.data.num_workers, pin_memory=args.data.pin_memory,
+        )
+        if args.train.global_rank == 0:
+            with open(os.path.join(args.train.output_dir, 'eval_subset.json'), 'w') as f:
+                json.dump({'seed': args.train.seed, 'episode_split': 'val',
+                           'train_path': args.data.train_path, 'indices': indices}, f, indent=2)
+        logger.info_rank0(f'Fixed validation subset: {len(indices)} sample starts; every {args.train.eval_steps} steps.')
+
     fsdp_kwargs = {}
     if args.train.freeze_vit:
         model.visual.requires_grad_(False)
@@ -541,6 +594,10 @@ def main():
     # bias_update_speed=0 makes the bias update a no-op (bias frozen at 0) while
     # keeping the global load monitoring intact.
     if args.train.use_moe:
+        # Norm-stat computation imports the argument classes on CPU; load CUDA
+        # kernels only when training actually needs the MoE hook.
+        from lingbotvla.models.vla.lingbot_vla.moe_load_balance import build_moe_load_balance_hook
+
         _lb_hook = build_moe_load_balance_hook(
             model, coeff=args.train.bias_update_speed, bias_centering=args.train.bias_centering,
             update_interval=args.train.bias_update_interval,
@@ -568,12 +625,14 @@ def main():
 
     if args.train.global_rank == 0:
         log_dir=f"{args.train.output_dir}/runs/"
-        writer = AsyncTBWriter(log_dir=log_dir)
         if args.train.use_wandb:
             wandb.init(
+                project=args.train.wandb_project,
                 name=args.train.wandb_name,
+                sync_tensorboard=True,
                 config={**vars(args.model), **vars(args.data), **vars(args.train)},  # flatten dict
             )
+        writer = AsyncTBWriter(log_dir=log_dir)
 
         if args.train.enable_profiling:
             profiler = helper.create_profiler(
@@ -916,28 +975,30 @@ def main():
             maxvio_str = f"MaxVio {maxvio_val.item() if torch.is_tensor(maxvio_val) else maxvio_val:.4f}, " if maxvio_val is not None else ""
             sigmoid_val = loss_log.get("moe_summary/topk_sigmoid_avg_rank0", loss_log.get("token_moe/avg_topk_sigmoid", None))
             sigmoid_str = f"AvgSigmoid {sigmoid_val.item() if torch.is_tensor(sigmoid_val) else sigmoid_val:.4f}, " if sigmoid_val is not None else ""
-            logger.info_rank0(
-                f"Step {global_step}/{args.train.train_steps}, "
-                f"Epoch {epoch+1}, "
-                f"Loss {total_loss:.4f}, "
-                f"VLA_Loss {total_vla_loss:.4f}, "
-                f"Depth_Loss {total_depth_loss:.4f}, "
-                f"Future_Depth_Loss {total_future_depth_loss:.4f}, "
-                f"FutureVideo_Loss {total_future_video_loss:.4f}, "
-                f"SeqWise_Loss {total_seq_wise_loss:.4f}, "
-                f"RouterZ_Loss {total_router_z_loss:.4f}, "
-                f"{maxvio_str}"
-                f"{sigmoid_str}"
-                f"GradNorm {grad_norm:.4f}, "
-                f"LR {lr:.2e}, "
-                f"{expert_lr_str}"
-                f"StepTime {delta_time:.3f}s, "
-                f"Depth_Forward_Time {depth_forward_time: .3f}s, "
-                f"Ignore_Batch_Num {ignore_batch_num}"
-            )
+            should_log = global_step % args.train.logging_steps == 0
+            if should_log:
+                logger.info_rank0(
+                    f"Step {global_step}/{args.train.train_steps}, "
+                    f"Epoch {epoch+1}, "
+                    f"Loss {total_loss:.4f}, "
+                    f"VLA_Loss {total_vla_loss:.4f}, "
+                    f"Depth_Loss {total_depth_loss:.4f}, "
+                    f"Future_Depth_Loss {total_future_depth_loss:.4f}, "
+                    f"FutureVideo_Loss {total_future_video_loss:.4f}, "
+                    f"SeqWise_Loss {total_seq_wise_loss:.4f}, "
+                    f"RouterZ_Loss {total_router_z_loss:.4f}, "
+                    f"{maxvio_str}"
+                    f"{sigmoid_str}"
+                    f"GradNorm {grad_norm:.4f}, "
+                    f"LR {lr:.2e}, "
+                    f"{expert_lr_str}"
+                    f"StepTime {delta_time:.3f}s, "
+                    f"Depth_Forward_Time {depth_forward_time: .3f}s, "
+                    f"Ignore_Batch_Num {ignore_batch_num}"
+                )
 
 
-            if args.train.global_rank == 0:
+            if args.train.global_rank == 0 and should_log:
                 writer.add_scalar("training/loss", total_loss, global_step)
                 writer.add_scalar("training/vla_loss", total_vla_loss, global_step)
                 writer.add_scalar("training/depth_loss", total_depth_loss, global_step)
@@ -1042,6 +1103,7 @@ def main():
                         mean_loss = sum(values) / len(values)
                         writer.add_scalar(f"detailed_loss/{name}", mean_loss, global_step)
 
+            if args.train.global_rank == 0:
                 if args.train.enable_profiling and global_step <= args.train.profile_end_step:
                     profiler.step()
                     if global_step == args.train.profile_end_step:
@@ -1081,6 +1143,23 @@ def main():
                                     current_target_feats=future_video_current_dino,
                                     current_pred_feats=future_video_current_preds,
                                 )
+
+            if validation_loader is not None and global_step % args.train.eval_steps == 0:
+                validation_start = time.time()
+                validation_metrics = evaluate_action_loss(
+                    model, validation_loader, torch.device('cuda', args.train.local_rank),
+                    seed=args.train.seed + args.train.global_rank,
+                )
+                validation_seconds = time.time() - validation_start
+                logger.info_rank0(
+                    f"Validation step {global_step}: VLA_Loss {validation_metrics['vla_loss']:.6f}, "
+                    f"Samples {validation_metrics['samples']}, Time {validation_seconds:.1f}s"
+                )
+                if args.train.global_rank == 0:
+                    for key, value in validation_metrics.items():
+                        writer.add_scalar(f'validation/{key}', value, global_step)
+                    writer.add_scalar('validation/seconds', validation_seconds, global_step)
+                    writer.flush()
 
             if args.train.save_steps and global_step % args.train.save_steps == 0:
                 helper.empty_cache()
@@ -1190,6 +1269,8 @@ def main():
         data_loader_tqdm.close()
     if args.train.global_rank == 0:
         writer.close()
+        if args.train.use_wandb:
+            wandb.finish()
     torch.cuda.synchronize()
     # release memory
     del optimizer, lr_scheduler

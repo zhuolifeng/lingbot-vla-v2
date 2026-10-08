@@ -10,6 +10,7 @@ from transformers.processing_utils import Unpack
 from transformers.utils import logging
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.models.qwen3_vl.configuration_qwen3_vl import Qwen3VLConfig, Qwen3VLTextConfig, Qwen3VLVisionConfig
+from lingbotvla.utils.deepstack import add_deepstack_features
 import transformers.models.qwen3_vl.modeling_qwen3_vl as hf_qwen3vl
 from transformers.models.qwen3_vl.modeling_qwen3_vl import (
     Qwen3VLForConditionalGeneration as _Qwen3VLForConditionalGeneration,
@@ -222,6 +223,11 @@ class Qwen3VLTextDecoderLayer(GradientCheckpointingLayer):
 
 
 class Qwen3VLTextModel(_Qwen3VLTextModel):
+    def _deepstack_process(self, hidden_states, visual_pos_masks, visual_embeds):
+        # The upstream boolean-index assignment introduces aten.nonzero and
+        # CopySlices in AOTAutograd. Keep the addition functional and fixed-shape.
+        return add_deepstack_features(hidden_states, visual_pos_masks, visual_embeds)
+
     def __init__(self, config: Qwen3VLTextConfig):
         Qwen3VLPreTrainedModel.__init__(self, config)
         self.padding_idx = config.pad_token_id

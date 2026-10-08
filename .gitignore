@@ -1,0 +1,7 @@
+checkpoints/
+assets/
+output/
+wandb/
+tests/
+**__pycache__**
+

@@ -1,0 +1,43 @@
+1. 请问训练和评测的具体要求是什么？
+选手需基于 LingBot-VLA 2.0 预训练模型完成训练与调优，训练数据统一使用 RoboTwin 2.0 中 Aloha-AgileX 的 50 个任务 clean 数据，每个任务 50 条，禁止使用 randomized 数据参与训练。
+
+选手可通过调整模型训练参数、优化训练策略、改进数据处理方式、调整模型结构或推理策略提升性能。最终需按照官方评测标准，提交 Aloha-AgileX 50 个任务在 clean 和 randomized 两个 setting 下的测试结果，每个任务测试 100 次。
+
+注意：randomized 数据只能用于测试，不能参与训练，也不能用外部数据！ 
+
+4. 最终提交的模型权重是否必须为全量权重，可以提交 LoRA 训练后合并回基座模型的权重吗？
+选手可以上传 LoRA 训练后 Merge 回基座的全量权重，不过类似这样的改动需要在 Config文件 或者 Readme 文件中说明清楚，方便评委进行评测。
+
+5. 评测结果 JSON 文件是否必须在 CUDA + cuRobo 环境下生成，如果使用 AMD 赛事算力，在 ROCm + MPLib 环境下生成评测结果，应该如何提交？
+正常提交，在 Readme 中说明清楚评测环境等细节以保证评委可以复现即可。
+
+6. 是否可以对 LingBot-VLA 2.0 进行较大幅度的模型结构改造？是否有必须保留的模块或参数比例要求？
+可以。只要基于 LingBot-VLA 2.0 进行改进，即主干模型从 LingBot-VLA 2.0 初始化即可。赛事没有要求必须保留特定模块或满足特定参数比例。
+
+7.是否允许使用其他公开的预训练模块或权重，例如 vision encoder、depth/segmentation encoder？
+允许使用其他公开的 vision encoder、depth/segmentation encoder。为便于主办方审核和复现验证、保证比赛公平性，需在 README 中注明相关模块或权重的来源及使用方式。
+
+8. 是否允许针对不同任务使用 task-specific 的 LoRA、adapter、head 或 checkpoint，并在推理时根据 task instruction 或 task ID 进行路由？
+不允许根据任务 ID 提前进行路由。这种方式在 instruction following 方面不公平。
+
+9. 推理阶段是否可以使用多个 checkpoint/model 做 ensemble，或加入 temporal ensemble、replanning、action smoothing、confidence gating 等模块？
+不允许根据题目相关信息（如任务 ID、instruction 等）进行确定性的路由等推理阶段增强。最终推理时只能使用一份权重。
+
+10 测试次数“按实测填写”是否意味着每个任务、每个 setting 不足 100 次也可以提交，还是仍必须完成各 100 次？
+建议尽量完成每个任务、每个 setting 的 100 次测试。若受时间或算力限制未能测满，最终以官方复测成绩为准。
+
+11. Clean 和 randomized 分别使用 seen 还是 unseen 指令？
+最终提交一份在 50 个任务上进行 cotrain 的权重，并分别在 clean2clean 和 clean2random 两种 setting 下测试。其中，clean2clean 对应 seen，clean2random 对应 unseen。
+
+12. Clean/randomized、各任务如何加权？最终排名采用自测成绩还是官方复测成绩？
+最终成绩以官方复测为准。
+
+13. 专家的五次限制是同一 seed 重试专家，还是失败后换 seed 筛选场景？达到五次上限后应如何处理、是否计入 JSON 的attempts？
+专家数据采集的五次限制按采集发起次数计算，与 seed 无关：每次尝试均可更换 seed 以筛选合适的场景随机化，也可同 seed 重试，但每次重试均计入配额。达到五次上限后，该场景不得再发起专家采集，但策略评估不受影响，应继续完成 policy 测试并如实记录成绩。
+
+🔗 资源相关
+1. 数据集在哪里？
+训练数据统一使用 RoboTwin 2.0 中 Aloha-AgileX 的 50 个任务 clean 数据，每个任务 50 条，禁止使用 randomized 数据参与训练。
+
+数据集链接：https://huggingface.co/datasets/TianxingChen/RoboTwin2.0
+

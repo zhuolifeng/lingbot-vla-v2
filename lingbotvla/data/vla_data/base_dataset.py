@@ -198,6 +198,25 @@ class VLADataset(Dataset):
         self.image_features = self.feature_transform.images
         
         lerobot_repo_id, lerobot_root = _resolve_lerobot_location(repo_id)
+        dataset_options = self.feature_transform.dataset_options
+        if dataset_options.get('reader') == 'local_v21':
+            from .local_v21_dataset import LocalV21Metadata, LocalV21Dataset
+
+            if lerobot_root is None:
+                raise ValueError('local_v21 requires an existing local dataset directory')
+            self.dataset_meta = LocalV21Metadata(lerobot_root)
+            merged_delta = {**self.get_delta_timestamps(), **self.get_video_delta_timestamps()}
+            self.dataset = LocalV21Dataset(
+                self.dataset_meta, delta_timestamps=merged_delta,
+                image_keys=self.feature_transform.org_features['images'],
+                numeric_keys=self.get_features(), options=dataset_options,
+                split=getattr(dataset_config, 'episode_split', 'train'),
+                load_image=load_image and not disabled_image_features,
+                image_transforms=Resize(image_size), video_backend=video_backend,
+            )
+            self.return_item = return_item
+            self.transform = transform
+            return
         metadata_kwargs = _filter_supported_kwargs(
             LeRobotDatasetMetadata.__init__,
             {"repo_id": lerobot_repo_id, "root": lerobot_root},

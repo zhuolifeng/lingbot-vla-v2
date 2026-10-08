@@ -40,7 +40,7 @@ def _expert_histogram_kernel(
     data = load_with_pred_1d(x_ptr + in_off, BLOCK_ALIGNED, in_off < num_elts, NUM_BINS_LAST_UNUSED - 1).to(tl.int32)
 
     tl.device_assert(
-        data < num_bins or data == NUM_BINS_LAST_UNUSED - 1,
+        (data < num_bins) | (data == NUM_BINS_LAST_UNUSED - 1),
         "Out-of-bound element found.",
     )
     count = tl.histogram(data, NUM_BINS_LAST_UNUSED)
@@ -351,7 +351,7 @@ def _moe_index_compute_kernel(
         processing_range < num_elts,
         _OOB_EXPERT_ID,
     )
-    assert expert_ids < NUM_EXPERTS or expert_ids == _OOB_EXPERT_ID
+    assert (expert_ids < NUM_EXPERTS) | (expert_ids == _OOB_EXPERT_ID)
 
     indices = tl.zeros([BLOCK_SIZE], dtype=tl.int32)
     for expert_id in tl.static_range(NUM_EXPERTS):

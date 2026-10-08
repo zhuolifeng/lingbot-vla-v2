@@ -427,6 +427,13 @@ class QwenvlWithExpertV2Model(PreTrainedModel):
 
 
 class FlowMatchingV2(FlowMatchingV1):
+    def embed_suffix(self, state, noisy_actions, timestep):
+        # Zero only the normalized model input. Keep the caller's real state
+        # intact for relative action targets and absolute action reconstruction.
+        if not getattr(self.config, "use_state", True):
+            state = torch.zeros_like(state)
+        return super().embed_suffix(state, noisy_actions, timestep)
+
     def __init__(self, config, eval):
         nn.Module.__init__(self)
         self.config = config
@@ -781,6 +788,7 @@ class FlowMatchingV2(FlowMatchingV1):
         future_video_targets=None,
         future_video_cls_targets=None,
         future_video_current_patch=None,
+        action_loss_only=False,
     ) -> Tensor:
         dtype = state.dtype
         device = state.device
@@ -843,7 +851,7 @@ class FlowMatchingV2(FlowMatchingV1):
             deepstack_visual_embeds=deepstack_visual_embeds,
         )
         align_metrics = {}
-        if self.config.align_params != {}:
+        if self.config.align_params != {} and not action_loss_only:
             loss_depth, loss_future_depth, depth_preds, future_depth_preds = self.depth_emb_forward(outputs_embeds, depth_targets, img_masks,future_depth_targets,)
             loss_depth = loss_depth * self.config.align_params["depth_loss_weight"]
             loss_future_depth = loss_future_depth * self.config.align_params.get("future_depth_loss_weight", 1.0)
@@ -910,9 +918,12 @@ class FlowMatchingV2(FlowMatchingV1):
         elif loss_type == "L1_fm":
             losses = F.l1_loss(u_t, v_t, reduction="none")
 
-        seq_wise_loss, router_z_loss, moe_metrics = self._moe_losses_and_metrics(
-            router_logits_list, losses
-        )
+        if action_loss_only:
+            seq_wise_loss, router_z_loss, moe_metrics = 0, 0, {}
+        else:
+            seq_wise_loss, router_z_loss, moe_metrics = self._moe_losses_and_metrics(
+                router_logits_list, losses
+            )
         if align_metrics:
             moe_metrics.update(align_metrics)
         return losses, loss_depth, loss_future_depth, loss_future_video, depth_preds, seq_wise_loss, router_z_loss, moe_metrics, future_depth_preds, future_video_preds, current_video_preds
@@ -1251,6 +1262,7 @@ class LingbotVlaV2Policy(PreTrainedModel):
         future_video_targets=None,
         future_video_cls_targets=None,
         future_video_current_patch=None,
+        action_loss_only=False,
         **kwargs
     ) -> tuple[Tensor, dict[str, Tensor]]:
         loss_dict = {}
@@ -1285,6 +1297,7 @@ class LingbotVlaV2Policy(PreTrainedModel):
             future_video_targets=future_video_targets,
             future_video_cls_targets=future_video_cls_targets,
             future_video_current_patch=future_video_current_patch,
+            action_loss_only=action_loss_only,
         )
 
         if joint_mask is not None:

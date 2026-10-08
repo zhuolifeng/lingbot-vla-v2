@@ -1,0 +1,34 @@
+data:
+  datasets_type: vla
+  data_name: multi
+  train_path: assets/training_data/umi.txt
+  robot_config_root: configs/robot_configs
+  joints:
+  - arm.position: 14
+  - end.position: 14
+  - effector.position: 2
+  - waist.position: 4
+  - head.position: 2
+  - base.position: 3
+  - hand.position: 12
+  cameras:
+  - camera_wrist_left
+  - camera_wrist_right
+  norm_type:
+  - arm.position: meanstd
+  - end.position: meanstd
+  - effector.position: meanstd
+  - waist.position: meanstd
+  - head.position: meanstd
+  - base.position: meanstd
+  - hand.position: meanstd
+  num_workers: 4
+  use_future_image: true
+  episode_split: train
+  norm_path: assets/norm_stats/umi.json
+train:
+  chunk_size: 50
+  micro_batch_size: 32
+  global_batch_size: 256
+  gradient_accumulation_steps: 1
+  output_dir: output/umi_norm
